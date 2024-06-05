@@ -5,6 +5,7 @@
 use crate::shared::device_create;
 use crate::shared::device_exists;
 use crate::shared::device_match;
+use crate::shared::parse_device;
 use crate::DevId;
 use crate::Device;
 use crate::DeviceInfo;
@@ -147,10 +148,7 @@ impl TargetParams for SnapshotTargetParams {
     fn param_str(&self) -> String {
         format!(
             "{} {} {} {}",
-            self.origin.to_string_lossy(),
-            self.cow_device.to_string_lossy(),
-            self.persistent,
-            self.chunksize
+            self.origin, self.cow_device, self.persistent, self.chunksize
         )
     }
 
@@ -172,7 +170,7 @@ impl TargetTable for SnapshotDevTargetTable {
         Ok(SnapshotDevTargetTable::new(
             Sectors(line.0),
             Sectors(line.1),
-            "".parse::<SnapshotTargetParams>()?,
+            format!("{} {}", line.2, line.3).parse::<SnapshotTargetParams>()?,
         ))
     }
 
@@ -197,8 +195,8 @@ impl TargetTable for SnapshotDevTargetTable {
 //
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SnapshotTargetParams {
-    origin: PathBuf,
-    cow_device: PathBuf,
+    origin: Device,
+    cow_device: Device,
     persistent: SnapshotPersistent,
     chunksize: usize,
 }
@@ -231,31 +229,13 @@ impl FromStr for SnapshotTargetParams {
             ErrorEnum::Invalid,
             "no required <origin> value in params string".into(),
         ))?;
-        let origin = PathBuf::from_str(device_string).map_err(|err| {
-            DmError::Dm(
-                ErrorEnum::Invalid,
-                format!(
-                    "Unable to create path from string {}, {}",
-                    device_string, err
-                ),
-            )
-        })?;
-        println!("{}", origin.to_string_lossy());
+        let origin = parse_device(device_string, "block device for snapshot origin")?;
 
         let cow_string = iter.next().ok_or(DmError::Dm(
             ErrorEnum::Invalid,
             "no required <COW device> value in params string".into(),
         ))?;
-        let cow_device = PathBuf::from_str(cow_string).map_err(|err| {
-            DmError::Dm(
-                ErrorEnum::Invalid,
-                format!(
-                    "Unable to create path from string {}, {}",
-                    device_string, err
-                ),
-            )
-        })?;
-        println!("{}", cow_device.to_string_lossy());
+        let cow_device = parse_device(cow_string, "block device for snapshot COW device")?;
         let persitent_string = iter.next().ok_or(DmError::Dm(
             ErrorEnum::Invalid,
             "no required <persistent?> flag in params string".into(),
