@@ -102,6 +102,8 @@ mod thinpooldev;
 /// representation of units used by the outer layers
 mod units;
 
+mod snapshot;
+
 #[cfg(test)]
 mod testing;
 
@@ -128,6 +130,7 @@ pub use crate::{
     shared::{
         device_exists, DmDevice, TargetLine, TargetParams, TargetTable, TargetType, TargetTypeBuf,
     },
+    snapshot::{SnapshotDev, SnapshotDevTargetTable, SnapshotTargetParams},
     thindev::{ThinDev, ThinDevTargetTable, ThinDevWorkingStatus, ThinStatus, ThinTargetParams},
     thindevid::ThinDevId,
     thinpooldev::{
