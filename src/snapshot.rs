@@ -14,7 +14,7 @@ const SNAPSHOT_TARGET_NAME: &str = "snapshot";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SnapshotDevTargetTable {
-    pub table: TargetLine<SnapshotTargetParams>,
+    pub table: Vec<TargetLine<SnapshotTargetParams>>,
 }
 
 #[derive(Debug)]
@@ -78,7 +78,7 @@ impl DmDevice<SnapshotDevTargetTable> for SnapshotDev {
     }
 
     fn size(&self) -> Sectors {
-        self.table.table.length
+        self.table.table.iter().map(|l| l.length).sum()
     }
 
     fn table(&self) -> &SnapshotDevTargetTable {
@@ -98,7 +98,7 @@ impl DmDevice<SnapshotDevTargetTable> for SnapshotDev {
 impl SnapshotDevTargetTable {
     fn new(start: Sectors, length: Sectors, params: SnapshotTargetParams) -> Self {
         Self {
-            table: TargetLine::new(start, length, params),
+            table: vec![TargetLine::new(start, length, params)],
         }
     }
 }
@@ -160,12 +160,17 @@ impl TargetTable for SnapshotDevTargetTable {
     }
 
     fn to_raw_table(&self) -> Vec<(u64, u64, String, String)> {
-        vec![(
-            *self.table.start,
-            *self.table.length,
-            self.table.params.target_type().to_string(),
-            self.table.params.param_str(),
-        )]
+        self.table
+            .iter()
+            .map(|x| {
+                (
+                    *x.start,
+                    *x.length,
+                    x.params.target_type().to_string(),
+                    x.params.param_str(),
+                )
+            })
+            .collect::<Vec<_>>()
     }
 }
 
