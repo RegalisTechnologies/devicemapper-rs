@@ -2,29 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use crate::shared::device_create;
-use crate::shared::device_exists;
-use crate::shared::device_match;
-use crate::shared::parse_device;
-use crate::DevId;
-use crate::Device;
-use crate::DeviceInfo;
-use crate::DmDevice;
-use crate::DmError;
-use crate::DmName;
-use crate::DmOptions;
-use crate::DmResult;
-use crate::DmUuid;
-use crate::ErrorEnum;
-use crate::Sectors;
-use crate::TargetLine;
-use crate::TargetParams;
-use crate::TargetTable;
-use crate::TargetTypeBuf;
-use crate::DM;
+use crate::shared::{device_create, device_exists, device_match, parse_device};
+use crate::{
+    DevId, Device, DeviceInfo, DmDevice, DmError, DmName, DmOptions, DmResult, DmUuid, ErrorEnum,
+    Sectors, TargetLine, TargetParams, TargetTable, TargetTypeBuf, DM,
+};
 
 use std::fmt::Display;
-use std::path::PathBuf;
 
 const SNAPSHOT_TARGET_NAME: &str = "snapshot";
 
@@ -143,6 +127,7 @@ impl Display for SnapshotPersistent {
 }
 
 use std::str::FromStr;
+use std::str::Split;
 
 impl TargetParams for SnapshotTargetParams {
     fn param_str(&self) -> String {
@@ -207,17 +192,19 @@ impl Display for SnapshotTargetParams {
     }
 }
 
+fn get_next_token<'a>(split: &mut Split<'a, char>, token_name: &str) -> DmResult<&'a str> {
+    split.next().ok_or(DmError::Dm(
+        ErrorEnum::Invalid,
+        format!("No {} string in params string", token_name),
+    ))
+}
+
 impl FromStr for SnapshotTargetParams {
     type Err = DmError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // TODO: refactor, it has to many lines of code
-        let mut iter = s.split(' ');
-
-        let snapshot_string = iter.next().ok_or(DmError::Dm(
-            ErrorEnum::Invalid,
-            "No snapshot string in params string".into(),
-        ))?;
+        let mut split = s.split(' ');
+        let snapshot_string = get_next_token(&mut split, "snapshot")?;
         if snapshot_string != "snapshot" {
             return Err(DmError::Dm(
                 ErrorEnum::Invalid,
@@ -225,21 +212,12 @@ impl FromStr for SnapshotTargetParams {
             ));
         }
 
-        let device_string = iter.next().ok_or(DmError::Dm(
-            ErrorEnum::Invalid,
-            "no required <origin> value in params string".into(),
-        ))?;
+        let device_string = get_next_token(&mut split, "<origin>")?;
         let origin = parse_device(device_string, "block device for snapshot origin")?;
 
-        let cow_string = iter.next().ok_or(DmError::Dm(
-            ErrorEnum::Invalid,
-            "no required <COW device> value in params string".into(),
-        ))?;
+        let cow_string = get_next_token(&mut split, "<COW device>")?;
         let cow_device = parse_device(cow_string, "block device for snapshot COW device")?;
-        let persitent_string = iter.next().ok_or(DmError::Dm(
-            ErrorEnum::Invalid,
-            "no required <persistent?> flag in params string".into(),
-        ))?;
+        let persitent_string = get_next_token(&mut split, "<persistent?>")?;
         let persistent: SnapshotPersistent = match persitent_string {
             "P" => Ok(SnapshotPersistent::Persistent),
             "N" => Ok(SnapshotPersistent::NonPersistent),
@@ -253,20 +231,13 @@ impl FromStr for SnapshotTargetParams {
             )),
         }?;
 
-        println!("Got flag: {:#?}", persistent);
-
-        let chunksize_string = iter.next().ok_or(DmError::Dm(
-            ErrorEnum::Invalid,
-            "no required <chunksize> value in params string".into(),
-        ))?;
-
+        let chunksize_string = get_next_token(&mut split, "<chunksize>")?;
         let chunksize = usize::from_str(chunksize_string).map_err(|err| {
             DmError::Dm(
                 ErrorEnum::Invalid,
                 format!("Invalid <chunksize> value: {}, {}", chunksize_string, err),
             )
         })?;
-        println!("Got chunksize: {}", chunksize);
 
         Ok(SnapshotTargetParams {
             origin,
