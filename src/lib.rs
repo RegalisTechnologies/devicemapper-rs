@@ -130,7 +130,7 @@ pub use crate::{
     shared::{
         device_exists, DmDevice, TargetLine, TargetParams, TargetTable, TargetType, TargetTypeBuf,
     },
-    snapshot::{SnapshotDev, SnapshotDevTargetTable, SnapshotTargetParams},
+    snapshot::{SnapshotDev, SnapshotDevTargetTable, SnapshotPersistent, SnapshotTargetParams},
     thindev::{ThinDev, ThinDevTargetTable, ThinDevWorkingStatus, ThinStatus, ThinTargetParams},
     thindevid::ThinDevId,
     thinpooldev::{
