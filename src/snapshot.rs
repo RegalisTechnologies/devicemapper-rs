@@ -266,6 +266,7 @@ impl SnapshotDev {
         start: Sectors,
         length: Sectors,
         params: SnapshotTargetParams,
+        options: DmOptions,
     ) -> DmResult<SnapshotDev> {
         let table = SnapshotDevTargetTable::new(start, length, params);
         let dev = if device_exists(dm, name)? {
@@ -277,7 +278,7 @@ impl SnapshotDev {
             device_match::<SnapshotDevTargetTable, SnapshotDev>(dm, &dev, uuid)?;
             dev
         } else {
-            let dev_info = device_create(dm, name, uuid, &table, DmOptions::default())?;
+            let dev_info = device_create(dm, name, uuid, &table, options)?;
             SnapshotDev {
                 dev_info: Box::new(dev_info),
                 table,
