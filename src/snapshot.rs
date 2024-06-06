@@ -110,10 +110,10 @@ impl Display for SnapshotDevTargetTable {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum SnapshotPersistent {
+pub enum SnapshotPersistent {
     Persistent,
     NonPersistent,
-    Overflow,
+    PersistentWithOverflowSupport,
 }
 
 impl Display for SnapshotPersistent {
@@ -121,11 +121,12 @@ impl Display for SnapshotPersistent {
         match self {
             SnapshotPersistent::Persistent => f.write_str("P"),
             SnapshotPersistent::NonPersistent => f.write_str("N"),
-            SnapshotPersistent::Overflow => f.write_str("PO"),
+            SnapshotPersistent::PersistentWithOverflowSupport => f.write_str("PO"),
         }
     }
 }
 
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::str::Split;
 
@@ -133,7 +134,7 @@ impl TargetParams for SnapshotTargetParams {
     fn param_str(&self) -> String {
         format!(
             "{} {} {} {}",
-            self.origin, self.cow_device, self.persistent, self.chunksize
+            self.origin_device, self.cow_device, self.persistent, self.chunksize
         )
     }
 
@@ -185,10 +186,26 @@ impl TargetTable for SnapshotDevTargetTable {
 //
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SnapshotTargetParams {
-    origin: Device,
+    origin_device: Device,
     cow_device: Device,
     persistent: SnapshotPersistent,
     chunksize: usize,
+}
+
+impl SnapshotTargetParams {
+    pub fn try_new(
+        origin_device: &str,
+        cow_device: &str,
+        persistent: SnapshotPersistent,
+        chunksize: usize,
+    ) -> DmResult<Self> {
+        Ok(Self {
+            origin_device: parse_device(origin_device, "Unable to parse origin device")?,
+            cow_device: parse_device(cow_device, "Unable to parse COW device")?,
+            persistent,
+            chunksize,
+        })
+    }
 }
 
 impl Display for SnapshotTargetParams {
@@ -218,7 +235,7 @@ impl FromStr for SnapshotTargetParams {
         }
 
         let device_string = get_next_token(&mut split, "<origin>")?;
-        let origin = parse_device(device_string, "block device for snapshot origin")?;
+        let origin_device = parse_device(device_string, "block device for snapshot origin")?;
 
         let cow_string = get_next_token(&mut split, "<COW device>")?;
         let cow_device = parse_device(cow_string, "block device for snapshot COW device")?;
@@ -226,7 +243,7 @@ impl FromStr for SnapshotTargetParams {
         let persistent: SnapshotPersistent = match persitent_string {
             "P" => Ok(SnapshotPersistent::Persistent),
             "N" => Ok(SnapshotPersistent::NonPersistent),
-            "PO" => Ok(SnapshotPersistent::Overflow),
+            "PO" => Ok(SnapshotPersistent::PersistentWithOverflowSupport),
             _ => Err(DmError::Dm(
                 ErrorEnum::Invalid,
                 format!(
@@ -245,7 +262,7 @@ impl FromStr for SnapshotTargetParams {
         })?;
 
         Ok(SnapshotTargetParams {
-            origin,
+            origin_device,
             cow_device,
             persistent,
             chunksize,
