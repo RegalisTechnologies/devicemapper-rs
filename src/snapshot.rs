@@ -2,10 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use std::{
-    fmt::Display,
-    str::{FromStr, Split},
-};
+use std::{collections::HashSet, fmt::Display, str::FromStr};
 
 use crate::{
     core::{DevId, Device, DeviceInfo, DmName, DmOptions, DmUuid, DM},
@@ -57,13 +54,26 @@ pub struct SnapshotTargetParams {
     cow_device: Device,
     persistent: SnapshotPersistent,
     chunksize: usize,
+    feature_args: HashSet<FeatureArg>,
 }
 
 impl TargetParams for SnapshotTargetParams {
     fn param_str(&self) -> String {
+        let feature_string = if self.feature_args.is_empty() {
+            "".to_owned()
+        } else {
+            format!(
+                " {}",
+                self.feature_args
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        };
         format!(
-            "{} {} {} {}",
-            self.origin_device, self.cow_device, self.persistent, self.chunksize
+            "{} {} {} {}{}",
+            self.origin_device, self.cow_device, self.persistent, self.chunksize, feature_string
         )
     }
 
@@ -84,12 +94,14 @@ impl SnapshotTargetParams {
         cow_device: &str,
         persistent: SnapshotPersistent,
         chunksize: usize,
+        feature_args: HashSet<FeatureArg>,
     ) -> DmResult<Self> {
         Ok(Self {
             origin_device: parse_device(origin_device, "Unable to parse origin device")?,
             cow_device: parse_device(cow_device, "Unable to parse COW device")?,
             persistent,
             chunksize,
+            feature_args,
         })
     }
 }
@@ -137,32 +149,81 @@ impl Display for SnapshotTargetParams {
     }
 }
 
-fn get_next_token<'a>(split: &mut Split<'a, char>, token_name: &str) -> DmResult<&'a str> {
-    split.next().ok_or(DmError::Dm(
-        ErrorEnum::Invalid,
-        format!("No {} string in params string", token_name),
-    ))
+/// Snapshot target optional feature parameters
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum FeatureArg {
+    /// A discard issued to the snapshot device that maps to entire chunks to will zero the corresponding exception(s) in the snapshot’s exception store.
+    DiscardZeroesCow,
+    /// A discard to the snapshot device is passed down to the snapshot-origin’s underlying device. This doesn’t cause copy-out to the snapshot exception store because the snapshot-origin target is bypassed.
+    /// The discard_passdown_origin feature depends on the discard_zeroes_cow feature being enabled.
+    DiscardPassdownOrigin,
+}
+
+impl FeatureArg {
+    /// Returns empty set of snapshot feature args
+    pub fn default() -> HashSet<Self> {
+        HashSet::new()
+    }
+}
+
+impl Display for FeatureArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            FeatureArg::DiscardZeroesCow => write!(f, "discard_zeroes_cow"),
+            FeatureArg::DiscardPassdownOrigin => write!(f, "discard_passdown_origin"),
+        }
+    }
 }
 
 impl FromStr for SnapshotTargetParams {
     type Err = DmError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut split = s.split(' ');
-        let snapshot_string = get_next_token(&mut split, "snapshot")?;
+        fn parse_feature_args(vals: &[&str]) -> DmResult<HashSet<FeatureArg>> {
+            let mut res = HashSet::new();
+            for &val in vals {
+                match val {
+                    "discard_zeroes_cow" => res.insert(FeatureArg::DiscardZeroesCow),
+                    "discard_passdown_origin" => res.insert(FeatureArg::DiscardPassdownOrigin),
+                    x => return Err(DmError::Dm(ErrorEnum::Invalid, format!("Invalid snapshot feature arg value: {}, supported values: 'discard_zeroes_cow', 'discard_passdown_origin'",x))),
+                };
+            }
+            if res.contains(&FeatureArg::DiscardPassdownOrigin)
+                && !res.contains(&FeatureArg::DiscardZeroesCow)
+            {
+                return Err(DmError::Dm(
+                    ErrorEnum::Invalid,
+                    "discard_zeroes_cow needs to be set in order to use discard_passdown_origin"
+                        .into(),
+                ));
+            }
+            Ok(res)
+        }
+        let params = s.split(' ').collect::<Vec<_>>();
+        let params_len = params.len();
+        if !(5..=7).contains(&params_len) {
+            return Err(DmError::Dm(
+                ErrorEnum::Invalid,
+                format!(
+                    "Invalid number of parameters: {}, expecting between 5 to 7 parameters",
+                    params_len
+                ),
+            ));
+        }
+        let snapshot_string = params[0];
         if snapshot_string != "snapshot" {
             return Err(DmError::Dm(
                 ErrorEnum::Invalid,
                 format!("expecting 'snapshot' string, got '{}'", snapshot_string),
             ));
         }
-
-        let device_string = get_next_token(&mut split, "<origin>")?;
+        let device_string = params[1];
         let origin = parse_device(device_string, "block device for snapshot origin")?;
 
-        let cow_string = get_next_token(&mut split, "<COW device>")?;
+        let cow_string = params[2];
         let cow_device = parse_device(cow_string, "block device for snapshot COW device")?;
-        let persitent_string = get_next_token(&mut split, "<persistent?>")?;
+        let persitent_string = params[3];
+
         let persistent: SnapshotPersistent = match persitent_string {
             "P" => Ok(SnapshotPersistent::Persistent),
             "N" => Ok(SnapshotPersistent::NonPersistent),
@@ -176,7 +237,7 @@ impl FromStr for SnapshotTargetParams {
             )),
         }?;
 
-        let chunksize_string = get_next_token(&mut split, "<chunksize>")?;
+        let chunksize_string = params[4];
         let chunksize = usize::from_str(chunksize_string).map_err(|err| {
             DmError::Dm(
                 ErrorEnum::Invalid,
@@ -184,11 +245,18 @@ impl FromStr for SnapshotTargetParams {
             )
         })?;
 
+        let feature_args = if params.len() > 5 {
+            parse_feature_args(&params[5..])?
+        } else {
+            HashSet::new()
+        };
+
         Ok(SnapshotTargetParams {
             origin_device: origin,
             cow_device,
             persistent,
             chunksize,
+            feature_args: feature_args.into_iter().collect::<HashSet<_>>(),
         })
     }
 }
@@ -210,7 +278,10 @@ impl SnapshotDevTargetTable {
 
 impl Display for SnapshotDevTargetTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Hi")
+        for line in &self.table {
+            writeln!(f, "{} {} {}", line.start, line.length, line.params)?;
+        }
+        Ok(())
     }
 }
 
@@ -271,6 +342,11 @@ impl SnapshotDev {
         let table = SnapshotDevTargetTable::new(start, length, params);
         let dev = if device_exists(dm, name)? {
             let dev_info = dm.device_info(&DevId::Name(name))?;
+            println!(
+                "Loaded flags: {:#?}, passed flags: {:#?}",
+                dev_info.flags(),
+                options.flags()
+            );
             let dev = SnapshotDev {
                 dev_info: Box::new(dev_info),
                 table,
@@ -328,5 +404,178 @@ impl DmDevice<SnapshotDevTargetTable> for SnapshotDev {
 
     fn uuid(&self) -> Option<&DmUuid> {
         self.dev_info.uuid()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    use crate::testing::{test_name, test_with_spec};
+
+    /// Verify that you can create snapshot device
+    fn test_setup(paths: &[&Path]) {
+        let dm = DM::new().unwrap();
+        let name = test_name("snapshot").expect("valid format");
+        let params = SnapshotTargetParams::try_new(
+            paths[0].to_str().unwrap(),
+            paths[1].to_str().unwrap(),
+            SnapshotPersistent::Persistent,
+            8,
+            FeatureArg::default(),
+        )
+        .unwrap();
+
+        let mut snapshot_dev = SnapshotDev::setup(
+            &dm,
+            &name,
+            None,
+            Sectors(0),
+            Sectors(1),
+            params,
+            DmOptions::default(),
+        )
+        .unwrap();
+        snapshot_dev.teardown(&dm).unwrap();
+    }
+
+    /// Verify that when you create a device with the same name the second time and you use the
+    /// same origin_device, cow_device and params then the setup will succeed
+    fn test_setup_same_device_twice(paths: &[&Path]) {
+        let dm = DM::new().unwrap();
+        let name = test_name("snapshot").expect("valid format");
+        let params = SnapshotTargetParams::try_new(
+            paths[0].to_str().unwrap(),
+            paths[1].to_str().unwrap(),
+            SnapshotPersistent::Persistent,
+            8,
+            FeatureArg::default(),
+        )
+        .unwrap();
+
+        SnapshotDev::setup(
+            &dm,
+            &name,
+            None,
+            Sectors(0),
+            Sectors(1),
+            params.clone(),
+            DmOptions::default(),
+        )
+        .unwrap();
+
+        let mut snapshot_dev = SnapshotDev::setup(
+            &dm,
+            &name,
+            None,
+            Sectors(0),
+            Sectors(1),
+            params,
+            DmOptions::default(),
+        )
+        .unwrap();
+        snapshot_dev.teardown(&dm).unwrap();
+    }
+
+    /// Verify that when you create a device with the same name the second time and
+    /// the params differ, the setup will fail
+    fn test_setup_twice_same_name_different_target_params(paths: &[&Path]) {
+        let dm = DM::new().unwrap();
+        let name = test_name("snapshot").expect("valid format");
+        let params1 = SnapshotTargetParams::try_new(
+            paths[0].to_str().unwrap(),
+            paths[1].to_str().unwrap(),
+            SnapshotPersistent::Persistent,
+            8,
+            FeatureArg::default(),
+        )
+        .unwrap();
+        let params2 = SnapshotTargetParams::try_new(
+            paths[0].to_str().unwrap(),
+            paths[1].to_str().unwrap(),
+            SnapshotPersistent::NonPersistent,
+            8,
+            FeatureArg::default(),
+        )
+        .unwrap();
+
+        SnapshotDev::setup(
+            &dm,
+            &name,
+            None,
+            Sectors(0),
+            Sectors(1),
+            params1,
+            DmOptions::default(),
+        )
+        .unwrap();
+        SnapshotDev::setup(
+            &dm,
+            &name,
+            None,
+            Sectors(0),
+            Sectors(1),
+            params2,
+            DmOptions::default(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn loop_test_setup() {
+        test_with_spec(2, test_setup);
+    }
+    #[test]
+    fn loop_test_setup_same_device_twice() {
+        test_with_spec(2, test_setup_same_device_twice);
+    }
+    #[test]
+    #[should_panic]
+    fn loop_test_setup_twice_same_name_different_target_params() {
+        test_with_spec(2, test_setup_twice_same_name_different_target_params);
+    }
+
+    #[test]
+    fn test_snapshot_target_params_no_feature_args() {
+        "snapshot 255:1 255:1 P 8"
+            .parse::<SnapshotTargetParams>()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_snapshot_target_params_discard_zeroes_cow() {
+        "snapshot 255:1 255:1 P 8 discard_zeroes_cow"
+            .parse::<SnapshotTargetParams>()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_snapshot_target_params_discard_zeroes_cow_and_discard_passdown_origin() {
+        "snapshot 255:1 255:1 P 8 discard_zeroes_cow discard_passdown_origin"
+            .parse::<SnapshotTargetParams>()
+            .unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_snapshot_target_params_discard_passdown_origin_but_no_discard_zeroes_cow() {
+        "snapshot 255:1 255:1 P 8 discard_passdown_origin"
+            .parse::<SnapshotTargetParams>()
+            .unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_snapshot_target_params_missing_target() {
+        "255:1 255:1 P 8".parse::<SnapshotTargetParams>().unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_snapshot_target_params_wrong_persitent_flag() {
+        "snapshot 255:1 255:1 R 8"
+            .parse::<SnapshotTargetParams>()
+            .unwrap();
     }
 }
